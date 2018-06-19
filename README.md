@@ -76,6 +76,7 @@ gulp.task('ifdef-copy', function() {
     extname: ['js', 'html']
   }))
   .pipe(gulp.dest('./dist'));
+}
 ```
 
 This will conditionally compile the source according to a JSON condition and the ext file name list(this is optinal. if not present then all the files will be processed)
