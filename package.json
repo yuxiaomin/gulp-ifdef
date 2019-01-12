@@ -4,14 +4,15 @@
   "description": "Streaming conditional compilation middleware for gulp.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jasmine"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yuxiaomin/gulp-ifdef.git"
   },
   "keywords": [
-    "gulpplugin", "ifdef"
+    "gulpplugin",
+    "ifdef"
   ],
   "author": "Xiaomin YU (yuxiaomin@gmail.com)",
   "license": "MIT",
@@ -20,9 +21,16 @@
   },
   "homepage": "https://github.com/yuxiaomin/gulp-ifdef#readme",
   "dependencies": {
-    "through2": "^2.0.3"
+    "source-map": "^0.7.3",
+    "through2": "^2.0.3",
+    "vinyl-sourcemaps-apply": "^0.2.1"
   },
   "engines": {
     "node": ">= 6.0.0"
+  },
+  "devDependencies": {
+    "gulp": "^4.0.0",
+    "gulp-sourcemaps": "^2.6.4",
+    "jasmine": "^3.3.1"
   }
 }
