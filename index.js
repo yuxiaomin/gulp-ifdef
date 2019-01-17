@@ -2,37 +2,64 @@
 
 var through = require('through2');
 var path = require('path');
+var sourceMap = require('source-map');
+var applySourceMap = require('vinyl-sourcemaps-apply');
 
 module.exports = function(ifdefOpt, configOpt) {
   ifdefOpt = ifdefOpt || {};
   configOpt = configOpt || {};
 
+  if (configOpt.verbose === undefined) {
+    configOpt.verbose = false;
+  }
+
   function bufferContents(file, enc, cb) {
-    // ignore empty files
-    if (file.isNull()) {
-      cb();
-      return;
+    try {
+      // ignore empty files
+      if (file.isNull()) {
+        cb();
+        return;
+      }
+
+      // we don't do streams (yet)
+      if (file.isStream()) {
+        throw new Error('Streaming not supported');
+      }
+
+      var extname = path.extname(file.relative).substr(1);
+      if(configOpt && configOpt.extname && configOpt.extname.indexOf(extname) != -1) {
+        // If the user does not specify the desired behavior, default to inserting
+        // blanks when there is no source map and cutting lines when there is.
+        let insertBlanks = configOpt.insertBlanks;
+        if (insertBlanks === undefined) insertBlanks = !file.sourceMap;
+
+        let parsed = parse(file.contents.toString(), ifdefOpt, configOpt.verbose, insertBlanks);
+        file.contents = Buffer.from(parsed.contents, 'utf8');
+
+        if (file.sourceMap) {
+          let generator = new sourceMap.SourceMapGenerator({
+            file: file.sourceMap.file
+          });
+          for (let i = 0; i < parsed.lineMappings.length; i++) {
+            generator.addMapping({
+              source: file.sourceMap.file,
+              original: { line: parsed.lineMappings[i] + 1, column: 0 },
+              generated: { line: i + 1, column: 0 }
+            });
+          }
+          applySourceMap(file, generator.toString());
+        }
+      }
+
+      this.push(file);
+    } catch (error) {
+      this.emit('error', new Error('gulp-ifdef: ' + error.message));
     }
 
-    // we don't do streams (yet)
-    if (file.isStream()) {
-      this.emit('error', new Error('gulp-ifdef: Streaming not supported'));
-      cb();
-      return;
-    }
-
-    var extname = path.extname(file.relative).substr(1);
-    if(configOpt && configOpt.extname && configOpt.extname.indexOf(extname) != -1) {
-      file.contents = Buffer.from(parse(file.contents.toString(), ifdefOpt, true), 'utf8');
-    }
-
-    this.push(file);
-    
     cb();
   }
 
   function endStream(cb) {
-    console.log("endStream");
     cb();
   }
 
@@ -52,50 +79,70 @@ var support = {
     elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->$/g
   }
 };
-function parse(source, defs, verbose) {
 
+function parse(source, defs, verbose, insertBlanks) {
   const lines = source.split('\n');
 
+  const lineMappings = [];
+  for(let i = 0; i < lines.length; i++) {
+    lineMappings.push(i);
+  }
+
   for(let n=0;;) {
-     let startInfo = find_start_if(lines,n);
-     if(startInfo === undefined) break;
+     const ifBlock = get_if_block(lines, n);
+     if (!ifBlock) break;
 
-     const endLine = find_end(lines, startInfo.line);
-     if(endLine === -1) {
-        throw `#if without #endif in line ${startInfo.line+1}`;
-     }
-
-     const elseLine = find_else(lines, startInfo.line, endLine);
-
-     const cond = evaluate(startInfo.condition, startInfo.keyword, defs);
+     const cond = evaluate(ifBlock.condition, ifBlock.keyword, defs);
 
      if(cond) {
         if(verbose) {
-           console.log(`matched condition #${startInfo.keyword} ${startInfo.condition} => including lines [${startInfo.line+1}-${endLine+1}]`);
+           console.log(`matched condition #${ifBlock.keyword} ${ifBlock.condition} => including lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
         }
-        blank_code(lines, startInfo.line, startInfo.line);
-        if (elseLine === -1) {
-           blank_code(lines, endLine, endLine);
+
+        if (ifBlock.elseLine === -1) {
+          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
         } else {
-           blank_code(lines, elseLine, endLine);
+          remove_lines(lines, lineMappings, ifBlock.elseLine, ifBlock.endLine, insertBlanks);
         }
+        remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.startLine, insertBlanks);
      } else {
-        if (elseLine === -1) {
-           blank_code(lines, startInfo.line, endLine);
-        } else {
-           blank_code(lines, startInfo.line, elseLine);
-           blank_code(lines, endLine, endLine);
-        }
         if(verbose) {
-           console.log(`not matched condition #${startInfo.keyword} ${startInfo.condition} => excluding lines [${startInfo.line+1}-${endLine+1}]`);
+           console.log(`not matched condition #${ifBlock.keyword} ${ifBlock.condition} => excluding lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
+        }
+
+        if (ifBlock.elseLine === -1) {
+          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.endLine, insertBlanks);
+        } else {
+          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
+          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.elseLine, insertBlanks);
         }
      }
 
-     n = startInfo.line;
+     n = ifBlock.startLine;
   }
 
-  return lines.join('\n');
+  return {
+    contents: lines.join('\n'),
+    lineMappings: lineMappings
+  };
 }
+
+function get_if_block(lines, n) {
+  let ifBlock = find_start_if(lines, n);
+  if (!ifBlock) return;
+
+  let endLine = find_end(lines, ifBlock.startLine);
+  if (endLine === -1) {
+    throw new Error(`#if without #endif in line ${ifBlock.startLine+1}`);
+  } else {
+    ifBlock.endLine = endLine;
+  }
+
+  let elseLine = find_else(lines, ifBlock.startLine, ifBlock.endLine);
+  ifBlock.elseLine = elseLine;
+
+  return ifBlock;
+};
 
 function match_if(line) {
   for(var s in support) {
@@ -103,7 +150,7 @@ function match_if(line) {
     const match = re.exec(line);
     if(match) {
       return {
-        line: -1,
+        startLine: -1,
         keyword: match[2],
         condition: match[3].trim()
      };
@@ -138,7 +185,7 @@ function find_start_if(lines, n) {
   for(let t=n; t<lines.length; t++) {
      const match = match_if(lines[t]);
      if(match !== undefined) {
-        match.line = t;
+        match.startLine = t;
         return match;
         // TODO: when es7 write as: return { line: t, ...match };
      }
@@ -203,7 +250,7 @@ function evaluate(condition, keyword, defs) {
      //console.log(`evaluation of (${condition}) === ${result}`);
   }
   catch(error) {
-     throw `error evaluation #if condition(${condition}): ${error}`;
+     throw new Error(`error evaluation #if condition(${condition}): ${error}`);
   }
 
   if(keyword === "ifndef") {
@@ -213,11 +260,31 @@ function evaluate(condition, keyword, defs) {
   return result;
 }
 
-function blank_code(lines, start, end) {
-  for(let t=start; t<=end; t++) {
-     const len = lines[t].length;
-     const lastChar = lines[t].charAt(len-1);
-     const windowsTermination = lastChar === '\r';
-     lines[t] = windowsTermination ? '\r' : '';
+/**
+ * Remove line numbers from the lines array, inclusive (so both line "start" and
+ * line "end" will be removed, along with all lines in between). If insertBlanks
+ * is true, instead of _cutting_ lines, we will replace them with blank lines instead.
+ *
+ * Typically, it is most useful to remove lines when you have source map support
+ * enabled, and to replace them with blank lines if you do not.
+ *
+ * @param {Array.<string>} lines
+ * @param {Array.<number>} lineMappings
+ * @param {number} start
+ * @param {number} end
+ * @param {boolean} insertBlanks
+ */
+function remove_lines(lines, lineMappings, start, end, insertBlanks) {
+  if (insertBlanks) {
+    for(let t=start; t<=end; t++) {
+      const len = lines[t].length;
+      const lastChar = lines[t].charAt(len-1);
+      const windowsTermination = lastChar === '\r';
+      lines[t] = windowsTermination ? '\r' : '';
+    }
+  } else {
+    let cutLength = end - start + 1;
+    lines.splice(start, cutLength);
+    lineMappings.splice(start, cutLength);
   }
 }
