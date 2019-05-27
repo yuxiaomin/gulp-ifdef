@@ -65,4 +65,48 @@ describe('gulp-ifdef', function () {
                 done();
             });
     });
+
+    describe('with CRLF line endings', function () {
+        it('inserts blank lines for blocks that evaluate to false', function (done) {
+            gulp.src(['spec/fixtures/crlf.js'])
+                .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'] }))
+                .on('data', file => {
+                    const expected = fs.readFileSync('spec/fixtures/crlf.insertBlanks.false.js', 'utf8');
+                    expect(file.contents.toString()).toEqual(expected);
+
+                    // confirm we're actually testing a CRLF file
+                    expect(expected.split(/\n/).length).toEqual(expected.split(/\r\n/).length);
+                    done();
+                })
+                .on('error', error => done(error));
+        });
+
+        it('retains blocks that evaluate to true', function (done) {
+            gulp.src(['spec/fixtures/crlf.js'])
+                .pipe(ifdef({ DEBUG: true, A: true }, { extname: ['js'] }))
+                .on('data', file => {
+                    const expected = fs.readFileSync('spec/fixtures/crlf.insertBlanks.true.js', 'utf8');
+                    expect(file.contents.toString()).toEqual(expected);
+
+                    // confirm we're actually testing a CRLF file
+                    expect(expected.split(/\n/).length).toEqual(expected.split(/\r\n/).length);
+                    done();
+                })
+                .on('error', error => done(error));
+        });
+
+        it('removes lines if insertBlanks is false', function (done) {
+            gulp.src(['spec/fixtures/crlf.js'])
+                .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'], insertBlanks: false }))
+                .on('data', file => {
+                    const expected = fs.readFileSync('spec/fixtures/crlf.cutLines.js', 'utf8');
+                    expect(file.contents.toString()).toEqual(expected);
+
+                    // confirm we're actually testing a CRLF file
+                    expect(expected.split(/\n/).length).toEqual(expected.split(/\r\n/).length);
+                    done();
+                })
+                .on('error', error => done(error));
+        });
+    });
 });
