@@ -5,6 +5,12 @@ var path = require('path');
 var sourceMap = require('source-map');
 var applySourceMap = require('vinyl-sourcemaps-apply');
 
+class IfdefParsingError extends Error {
+  constructor(message, lines, lineMappings, lineNo) {
+    super(`${message} on line ${lineMappings[lineNo] + 1}: ${lines[lineNo]}`);
+  }
+}
+
 module.exports = function(ifdefOpt, configOpt) {
   ifdefOpt = ifdefOpt || {};
   configOpt = configOpt || {};
@@ -80,6 +86,7 @@ var support = {
   }
 };
 
+
 function parse(source, defs, verbose, insertBlanks) {
   const lines = source.split('\n');
 
@@ -88,37 +95,42 @@ function parse(source, defs, verbose, insertBlanks) {
     lineMappings.push(i);
   }
 
-  for(let n=0;;) {
-     const ifBlock = get_if_block(lines, n);
-     if (!ifBlock) break;
+  const stack = [];
+  let ifBlock;
+  let match;
 
-     const cond = evaluate(ifBlock.condition, ifBlock.keyword, defs);
+  for (let n = 0; n < lines.length; n++) {
+    if (match = match_if(lines[n])) {
+      stack.push({
+        ifLine: n,
+        elseLine: -1,
+        endifLine: -1,
+        keyword: match.keyword,
+        condition: match.condition
+      });
+    } else if (match = match_else(lines[n])) {
+      ifBlock = stack[stack.length - 1];
+      if (!ifBlock) {
+        throw new Error(`#else outside of #if block on line ${n + 1}: ${lines[n]}`);
+      } else if (ifBlock.elseLine > -1) {
+        throw new Error(`#else again`);
+      } else {
+        ifBlock.elseLine = n;
+      }
+    } else if (match = match_endif(lines[n])) {
+      ifBlock = stack.pop();
+      if (!ifBlock) {
+        throw new Error(`bad #endif`);
+      } else {
+        ifBlock.endifLine = n;
+        applyIfBlock(lines, lineMappings, ifBlock, defs, insertBlanks);
+        n = ifBlock.ifLine - 1;
+      }
+    }
+  }
 
-     if(cond) {
-        if(verbose) {
-           console.log(`matched condition #${ifBlock.keyword} ${ifBlock.condition} => including lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
-        }
-
-        if (ifBlock.elseLine === -1) {
-          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
-        } else {
-          remove_lines(lines, lineMappings, ifBlock.elseLine, ifBlock.endLine, insertBlanks);
-        }
-        remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.startLine, insertBlanks);
-     } else {
-        if(verbose) {
-           console.log(`not matched condition #${ifBlock.keyword} ${ifBlock.condition} => excluding lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
-        }
-
-        if (ifBlock.elseLine === -1) {
-          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.endLine, insertBlanks);
-        } else {
-          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
-          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.elseLine, insertBlanks);
-        }
-     }
-
-     n = ifBlock.startLine;
+  if (stack.length > 0) {
+    throw new IfdefParsingError('#if without #endif', lines, lineMappings, stack[0].ifLine);
   }
 
   return {
@@ -127,22 +139,25 @@ function parse(source, defs, verbose, insertBlanks) {
   };
 }
 
-function get_if_block(lines, n) {
-  let ifBlock = find_start_if(lines, n);
-  if (!ifBlock) return;
+function applyIfBlock(lines, lineMappings, ifBlock, defs, insertBlanks) {
+  const cond = evaluate(ifBlock.condition, ifBlock.keyword, defs);
 
-  let endLine = find_end(lines, ifBlock.startLine);
-  if (endLine === -1) {
-    throw new Error(`#if without #endif in line ${ifBlock.startLine+1}`);
+  if (cond) {
+    if (ifBlock.elseLine === -1) {
+      remove_lines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
+    } else {
+      remove_lines(lines, lineMappings, ifBlock.elseLine, ifBlock.endifLine, insertBlanks);
+    }
+    remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.ifLine, insertBlanks);
   } else {
-    ifBlock.endLine = endLine;
+    if (ifBlock.elseLine === -1) {
+      remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.endifLine, insertBlanks);
+    } else {
+      remove_lines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
+      remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.elseLine, insertBlanks);
+    }
   }
-
-  let elseLine = find_else(lines, ifBlock.startLine, ifBlock.endLine);
-  ifBlock.elseLine = elseLine;
-
-  return ifBlock;
-};
+}
 
 function match_if(line) {
   for(var s in support) {
@@ -179,60 +194,6 @@ function match_else(line) {
     }
   }
   return false;
-}
-
-function find_start_if(lines, n) {
-  for(let t=n; t<lines.length; t++) {
-     const match = match_if(lines[t]);
-     if(match !== undefined) {
-        match.startLine = t;
-        return match;
-        // TODO: when es7 write as: return { line: t, ...match };
-     }
-  }
-  return undefined;
-}
-
-function find_end(lines, start) {
-  let level = 1;
-  for(let t=start+1; t<lines.length; t++) {
-     const mif  = match_if(lines[t]);
-     const mend = match_endif(lines[t]);
-
-     if(mif) {
-        level++;
-     }
-
-     if(mend) {
-        level--;
-        if(level === 0) {
-           return t;
-        }
-     }
-  }
-  return -1;
-}
-
-function find_else(lines, start, end) {
-  let level = 1;
-  for(let t=start+1; t<end; t++) {
-     const mif  = match_if(lines[t]);
-     const melse = match_else(lines[t]);
-     const mend = match_endif(lines[t]);
-     if(mif) {
-        level++;
-     }
-
-     if(mend) {
-        level--;
-     }
-
-     if (melse && level === 1) {
-        return t;
-     }
-  }
-
-  return -1;
 }
 
 /**
