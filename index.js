@@ -1,9 +1,9 @@
 'use strict';
 
-var through = require('through2');
-var path = require('path');
-var sourceMap = require('source-map');
-var applySourceMap = require('vinyl-sourcemaps-apply');
+const through = require('through2');
+const path = require('path');
+const sourceMap = require('source-map');
+const applySourceMap = require('vinyl-sourcemaps-apply');
 
 class IfdefParsingError extends Error {
   constructor(message, lines, lineMappings, lineNo) {
@@ -86,7 +86,6 @@ var support = {
   }
 };
 
-
 function parse(source, defs, verbose, insertBlanks) {
   const lines = source.split('\n');
 
@@ -100,7 +99,7 @@ function parse(source, defs, verbose, insertBlanks) {
   let match;
 
   for (let n = 0; n < lines.length; n++) {
-    if (match = match_if(lines[n])) {
+    if (match = matchIf(lines[n])) {
       stack.push({
         ifLine: n,
         elseLine: -1,
@@ -108,7 +107,7 @@ function parse(source, defs, verbose, insertBlanks) {
         keyword: match.keyword,
         condition: match.condition
       });
-    } else if (match = match_else(lines[n])) {
+    } else if (match = matchElse(lines[n])) {
       ifBlock = stack[stack.length - 1];
       if (!ifBlock) {
         throw new IfdefParsingError('#else outside of #if block', lines, lineMappings, n);
@@ -117,7 +116,7 @@ function parse(source, defs, verbose, insertBlanks) {
       } else {
         ifBlock.elseLine = n;
       }
-    } else if (match = match_endif(lines[n])) {
+    } else if (match = matchEndif(lines[n])) {
       ifBlock = stack.pop();
       if (!ifBlock) {
         throw new IfdefParsingError('#endif outside of #if block', lines, lineMappings, n);
@@ -140,27 +139,25 @@ function parse(source, defs, verbose, insertBlanks) {
 }
 
 function applyIfBlock(lines, lineMappings, ifBlock, defs, insertBlanks) {
-  const cond = evaluate(ifBlock.condition, ifBlock.keyword, defs);
-
-  if (cond) {
+  if (evaluate(ifBlock.condition, ifBlock.keyword, defs)) {
     if (ifBlock.elseLine === -1) {
-      remove_lines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
+      removeLines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
     } else {
-      remove_lines(lines, lineMappings, ifBlock.elseLine, ifBlock.endifLine, insertBlanks);
+      removeLines(lines, lineMappings, ifBlock.elseLine, ifBlock.endifLine, insertBlanks);
     }
-    remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.ifLine, insertBlanks);
+    removeLines(lines, lineMappings, ifBlock.ifLine, ifBlock.ifLine, insertBlanks);
   } else {
     if (ifBlock.elseLine === -1) {
-      remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.endifLine, insertBlanks);
+      removeLines(lines, lineMappings, ifBlock.ifLine, ifBlock.endifLine, insertBlanks);
     } else {
-      remove_lines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
-      remove_lines(lines, lineMappings, ifBlock.ifLine, ifBlock.elseLine, insertBlanks);
+      removeLines(lines, lineMappings, ifBlock.endifLine, ifBlock.endifLine, insertBlanks);
+      removeLines(lines, lineMappings, ifBlock.ifLine, ifBlock.elseLine, insertBlanks);
     }
   }
 }
 
-function match_if(line) {
-  for(var s in support) {
+function matchIf(line) {
+  for(let s in support) {
     let re = support[s].ifre;
     const match = String(line).match(re);
     if(match) {
@@ -174,8 +171,8 @@ function match_if(line) {
   return undefined;
 }
 
-function match_endif(line) {
-  for(var s in support) {
+function matchEndif(line) {
+  for(let s in support) {
     let re = support[s].endifre;
     const match = String(line).match(re);
     if(match) {
@@ -185,8 +182,8 @@ function match_endif(line) {
   return false;
 }
 
-function match_else(line) {
-  for(var s in support) {
+function matchElse(line) {
+  for(let s in support) {
     let re = support[s].elsere;
     const match = String(line).match(re);
     if(match) {
@@ -200,7 +197,6 @@ function match_else(line) {
 * @return true if block has to be preserved
 */
 function evaluate(condition, keyword, defs) {
-
   const code = `return (${condition}) ? true : false;`;
   const args = Object.keys(defs);
 
@@ -234,7 +230,7 @@ function evaluate(condition, keyword, defs) {
  * @param {number} end
  * @param {boolean} insertBlanks
  */
-function remove_lines(lines, lineMappings, start, end, insertBlanks) {
+function removeLines(lines, lineMappings, start, end, insertBlanks) {
   if (insertBlanks) {
     for(let t=start; t<=end; t++) {
       const len = lines[t].length;
