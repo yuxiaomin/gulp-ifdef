@@ -104,4 +104,15 @@ describe('gulp-ifdef', function () {
                 done();
             });
     });
+
+    it('correctly handles nested if blocks', function (done) {
+        gulp.src(['spec/fixtures/nested.js'])
+        .pipe(ifdef({ A: true, B: false, C: true }, { extname: ['js'] }))
+        .on('data', file => {
+            const expected = fs.readFileSync('spec/fixtures/nested.out.js', 'utf8');
+            expect(file.contents.toString()).toEqual(expected);
+            done();
+        })
+        .on('error', error => done(error));
+    });
 });
