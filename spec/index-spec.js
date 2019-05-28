@@ -55,13 +55,52 @@ describe('gulp-ifdef', function () {
     it('throws an error if an #if block is missing an #endif', function (done) {
         gulp.src(['spec/fixtures/missingEndif.js'])
             .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'] }))
-            .on('data', file => {
-                const expected = fs.readFileSync('spec/fixtures/simple.insertBlanks.false.js', 'utf8');
-                expect(file.contents.toString()).toEqual(expected);
+            .on('data', done.fail)
+            .on('error', error => {
+                expect(String(error)).toEqual('Error: gulp-ifdef: #if without #endif on line 3:         /// #if A');
+                done();
+            });
+    });
+
+    it('throws an error on unexpected #endif', function (done) {
+        gulp.src(['spec/fixtures/doubleEndif.js'])
+            .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'] }))
+            .on('data', done.fail)
+            .on('error', error => {
+                expect(String(error)).toEqual('Error: gulp-ifdef: #endif outside of #if block on line 5:         /// #endif');
+                done();
+            });
+    });
+
+    it('throws an error on double #else', function (done) {
+        gulp.src(['spec/fixtures/doubleElse.js'])
+            .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'] }))
+            .on('data', done.fail)
+            .on('error', error => {
+                expect(String(error)).toEqual('Error: gulp-ifdef: second #else in #if block on line 7:         /// #else');
+                done();
+            });
+    });
+
+    it('throws an error on unexpected #else', function (done) {
+        gulp.src(['spec/fixtures/unexpectedElse.js'])
+            .pipe(ifdef({ DEBUG: false, A: false }, { extname: ['js'] }))
+            .on('data', done.fail)
+            .on('error', error => {
+                expect(String(error)).toEqual('Error: gulp-ifdef: #else outside of #if block on line 5:         /// #else');
+                done();
+            });
+    });
+
+    it('throws an error on the correct line when cutting lines', function (done) {
+        gulp.src(['spec/fixtures/complexError.js'])
+            .pipe(ifdef({ A: false, B: false }, { extname: ['js'], insertBlanks: false }))
+            .on('data', result => {
+                console.log(result.contents.toString());
                 done();
             })
             .on('error', error => {
-                expect(String(error)).toEqual('Error: gulp-ifdef: #if without #endif in line 3');
+                expect(String(error)).toEqual('Error: gulp-ifdef: #endif outside of #if block on line 10:         /// #endif');
                 done();
             });
     });

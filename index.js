@@ -74,15 +74,15 @@ module.exports = function(ifdefOpt, configOpt) {
 
 var support = {
   "useTripleSlash": {
-    ifre: /^[\s]*\/\/\/([\s]*)#(if)([\s\S]+)$/g,
-    endifre: /^[\s]*\/\/\/([\s]*)#(endif)[\s]*$/g,
-    elsere: /^[\s]*\/\/\/([\s]*)#(else)[\s]*$/g
+    ifre: /^[\s]*\/\/\/([\s]*)#(if)([\s\S]+)$/,
+    endifre: /^[\s]*\/\/\/([\s]*)#(endif)[\s]*$/,
+    elsere: /^[\s]*\/\/\/([\s]*)#(else)[\s]*$/
 
   },
   "useHTML": {
-    ifre: /^[\s]*<!--([\s]*)#(if)([\s\S]+)-->$/g,
-    endifre: /^[\s]*<!--([\s]*)#(endif)([\s\S]+)-->$/g,
-    elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->$/g
+    ifre: /^[\s]*<!--([\s]*)#(if)([\s\S]+)-->$/,
+    endifre: /^[\s]*<!--([\s]*)#(endif)([\s\S]+)-->$/,
+    elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->$/
   }
 };
 
@@ -111,16 +111,16 @@ function parse(source, defs, verbose, insertBlanks) {
     } else if (match = match_else(lines[n])) {
       ifBlock = stack[stack.length - 1];
       if (!ifBlock) {
-        throw new Error(`#else outside of #if block on line ${n + 1}: ${lines[n]}`);
+        throw new IfdefParsingError('#else outside of #if block', lines, lineMappings, n);
       } else if (ifBlock.elseLine > -1) {
-        throw new Error(`#else again`);
+        throw new IfdefParsingError('second #else in #if block', lines, lineMappings, n);
       } else {
         ifBlock.elseLine = n;
       }
     } else if (match = match_endif(lines[n])) {
       ifBlock = stack.pop();
       if (!ifBlock) {
-        throw new Error(`bad #endif`);
+        throw new IfdefParsingError('#endif outside of #if block', lines, lineMappings, n);
       } else {
         ifBlock.endifLine = n;
         applyIfBlock(lines, lineMappings, ifBlock, defs, insertBlanks);
@@ -162,7 +162,7 @@ function applyIfBlock(lines, lineMappings, ifBlock, defs, insertBlanks) {
 function match_if(line) {
   for(var s in support) {
     let re = support[s].ifre;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return {
         startLine: -1,
@@ -177,7 +177,7 @@ function match_if(line) {
 function match_endif(line) {
   for(var s in support) {
     let re = support[s].endifre;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return true;
     }
@@ -188,7 +188,7 @@ function match_endif(line) {
 function match_else(line) {
   for(var s in support) {
     let re = support[s].elsere;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return true;
     }
@@ -209,9 +209,8 @@ function evaluate(condition, keyword, defs) {
     const f = new Function(...args, code);
     result = f(...args.map((k) => defs[k]));
      //console.log(`evaluation of (${condition}) === ${result}`);
-  }
-  catch(error) {
-     throw new Error(`error evaluation #if condition(${condition}): ${error}`);
+  } catch(error) {
+     throw new Error(`error evaluating #if condition(${condition}): ${error}`);
   }
 
   if(keyword === "ifndef") {
