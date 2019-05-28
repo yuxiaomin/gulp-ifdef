@@ -115,4 +115,25 @@ describe('gulp-ifdef', function () {
         })
         .on('error', error => done(error));
     });
+
+    it('prints debugging information if verbose mode is enabled', function (done) {
+        spyOn(console, 'log');
+
+        gulp.src(['spec/fixtures/nested.js'])
+        .pipe(ifdef({ A: true, B: false, C: true }, { extname: ['js'], verbose: true, insertBlanks: false }))
+        .on('data', file => {
+            const expected = fs.readFileSync('spec/fixtures/nested.cutLines.js', 'utf8');
+            expect(file.contents.toString()).toEqual(expected);
+            expect(console.log.calls.allArgs()).toEqual([
+                ['Condition (#if C) is true: keeping lines 10-10 of 9-13'],
+                ['Condition (#if B) is false: keeping lines 8-13 of 5-14'],
+                ['Condition (#if C) is true: keeping lines 18-18 of 17-19'],
+                ['Condition (#if A) is true: keeping lines 4-14 of 3-20'],
+                ['Condition (#if C) is true: keeping lines 23-23 of 22-24'],
+                ['Condition (#if B) is false: removing lines 26-28']
+            ]);
+            done();
+        })
+        .on('error', error => done(error));
+    });
 });

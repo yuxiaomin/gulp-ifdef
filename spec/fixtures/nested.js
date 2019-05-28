@@ -22,5 +22,9 @@ class Example {
         /// #if C
         console.log("this stuff will");
         /// #endif
-   }
+
+        /// #if B
+        console.log("not this stuff");
+        /// #endif
+    }
 }
