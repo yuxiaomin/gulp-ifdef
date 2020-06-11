@@ -1,0 +1,3 @@
+* text=auto
+spec/fixtures/crlf.js eol=crlf
+spec/fixtures/crlf.*.js eol=crlf
