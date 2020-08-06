@@ -1,9 +1,15 @@
 'use strict';
 
-var through = require('through2');
-var path = require('path');
-var sourceMap = require('source-map');
-var applySourceMap = require('vinyl-sourcemaps-apply');
+const through = require('through2');
+const path = require('path');
+const sourceMap = require('source-map');
+const applySourceMap = require('vinyl-sourcemaps-apply');
+
+class IfdefParsingError extends Error {
+  constructor(message, lines, lineNo) {
+    super(`${message} on line ${lineNo + 1}: ${lines[lineNo]}`);
+  }
+}
 
 module.exports = function(ifdefOpt, configOpt) {
   ifdefOpt = ifdefOpt || {};
@@ -68,86 +74,132 @@ module.exports = function(ifdefOpt, configOpt) {
 
 var support = {
   "useTripleSlash": {
-    ifre: /^[\s]*\/\/\/([\s]*)#(if)([\s\S]+)$/g,
-    endifre: /^[\s]*\/\/\/([\s]*)#(endif)[\s]*$/g,
-    elsere: /^[\s]*\/\/\/([\s]*)#(else)[\s]*$/g
+    ifre: /^[\s]*\/\/\/([\s]*)#(if)([\s\S]+)$/,
+    endifre: /^[\s]*\/\/\/([\s]*)#(endif)[\s]*$/,
+    elsere: /^[\s]*\/\/\/([\s]*)#(else)[\s]*$/
 
   },
   "useHTML": {
-    ifre: /^[\s]*<!--([\s]*)#(if)([\s\S]+)-->$/g,
-    endifre: /^[\s]*<!--([\s]*)#(endif)([\s\S]+)-->$/g,
-    elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->$/g
+    ifre: /^[\s]*<!--([\s]*)#(if)([\s\S]+)-->$/,
+    endifre: /^[\s]*<!--([\s]*)#(endif)([\s\S]+)-->$/,
+    elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->$/
   }
 };
 
 function parse(source, defs, verbose, insertBlanks) {
-  const lines = source.split('\n');
+  const lines = createState(source);
+  const stack = [];
+  let ifBlock;
+  let match;
 
-  const lineMappings = [];
-  for(let i = 0; i < lines.length; i++) {
-    lineMappings.push(i);
+  for (let n = 0; n < lines.length; n++) {
+    if (match = matchIf(lines[n])) {
+      stack.push({
+        ifLine: n,
+        elseLine: -1,
+        endifLine: -1,
+        keyword: match.keyword,
+        condition: match.condition
+      });
+    } else if (match = matchElse(lines[n])) {
+      ifBlock = stack[stack.length - 1];
+      if (!ifBlock) {
+        throw new IfdefParsingError('#else outside of #if block', lines, n);
+      } else if (ifBlock.elseLine > -1) {
+        throw new IfdefParsingError('second #else in #if block', lines, n);
+      } else {
+        ifBlock.elseLine = n;
+      }
+    } else if (match = matchEndif(lines[n])) {
+      ifBlock = stack.pop();
+      if (!ifBlock) {
+        throw new IfdefParsingError('#endif outside of #if block', lines, n);
+      } else {
+        ifBlock.endifLine = n;
+        applyIfBlock(lines, ifBlock, defs, verbose);
+      }
+    }
   }
 
-  for(let n=0;;) {
-     const ifBlock = get_if_block(lines, n);
-     if (!ifBlock) break;
-
-     const cond = evaluate(ifBlock.condition, ifBlock.keyword, defs);
-
-     if(cond) {
-        if(verbose) {
-           console.log(`matched condition #${ifBlock.keyword} ${ifBlock.condition} => including lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
-        }
-
-        if (ifBlock.elseLine === -1) {
-          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
-        } else {
-          remove_lines(lines, lineMappings, ifBlock.elseLine, ifBlock.endLine, insertBlanks);
-        }
-        remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.startLine, insertBlanks);
-     } else {
-        if(verbose) {
-           console.log(`not matched condition #${ifBlock.keyword} ${ifBlock.condition} => excluding lines [${ifBlock.startLine+1}-${ifBlock.endLine+1}]`);
-        }
-
-        if (ifBlock.elseLine === -1) {
-          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.endLine, insertBlanks);
-        } else {
-          remove_lines(lines, lineMappings, ifBlock.endLine, ifBlock.endLine, insertBlanks);
-          remove_lines(lines, lineMappings, ifBlock.startLine, ifBlock.elseLine, insertBlanks);
-        }
-     }
-
-     n = ifBlock.startLine;
+  if (stack.length > 0) {
+    throw new IfdefParsingError('#if without #endif', lines, stack[0].ifLine);
   }
 
-  return {
-    contents: lines.join('\n'),
-    lineMappings: lineMappings
-  };
+  return lines.finalize(insertBlanks);
 }
 
-function get_if_block(lines, n) {
-  let ifBlock = find_start_if(lines, n);
-  if (!ifBlock) return;
+function createState(source) {
+  const lines = source.split('\n');
+  let linesToCut = [];
 
-  let endLine = find_end(lines, ifBlock.startLine);
-  if (endLine === -1) {
-    throw new Error(`#if without #endif in line ${ifBlock.startLine+1}`);
+  // Add a block of lines to the list of planned cuts. We'll save all planned
+  // cuts until we're done processing the file, then apply them all at once.
+  lines.cut = function (start, end) {
+    for (let i = start; i <= end; i++) {
+      linesToCut.push(i);
+    }
+  };
+
+  // Finalize all cut lines and return the output contents and line mappings
+  lines.finalize = function (insertBlanks) {
+    // Process lines to cut in reverse order (from bottom of file)
+    linesToCut = linesToCut.sort((a, b) => b - a);
+
+    const lineMappings = [];
+    for(let i = 0; i < lines.length; i++) {
+      lineMappings.push(i);
+    }
+
+    for (let i = 0; i < linesToCut.length; i++) {
+      if (linesToCut[i] === linesToCut[i - 1]) continue;
+
+      let t = linesToCut[i];
+      if (insertBlanks) {
+        const len = lines[t].length;
+        const lastChar = lines[t].charAt(len-1);
+        const windowsTermination = lastChar === '\r';
+        lines[t] = windowsTermination ? '\r' : '';
+      } else {
+        lines.splice(t, 1);
+        lineMappings.splice(t, 1);
+      }
+    }
+
+    return {
+      contents: lines.join('\n'),
+      lineMappings: lineMappings
+    };
+  };
+
+  return lines;
+}
+
+function applyIfBlock(lines, ifBlock, defs, verbose) {
+  if (evaluate(ifBlock.condition, ifBlock.keyword, defs)) {
+    if (ifBlock.elseLine === -1) {
+      if (verbose) logResult(ifBlock, true, ifBlock.ifLine + 1, ifBlock.endifLine - 1);
+      lines.cut(ifBlock.endifLine, ifBlock.endifLine);
+    } else {
+      if (verbose) logResult(ifBlock, true, ifBlock.ifLine + 1, ifBlock.elseLine - 1);
+      lines.cut(ifBlock.elseLine, ifBlock.endifLine);
+    }
+    lines.cut(ifBlock.ifLine, ifBlock.ifLine);
   } else {
-    ifBlock.endLine = endLine;
+    if (ifBlock.elseLine === -1) {
+      if (verbose) logResult(ifBlock, false, -1, -1);
+      lines.cut(ifBlock.ifLine, ifBlock.endifLine);
+    } else {
+      if (verbose) logResult(ifBlock, false, ifBlock.elseLine + 1, ifBlock.endifLine - 1);
+      lines.cut(ifBlock.ifLine, ifBlock.elseLine);
+      lines.cut(ifBlock.endifLine, ifBlock.endifLine);
+    }
   }
+}
 
-  let elseLine = find_else(lines, ifBlock.startLine, ifBlock.endLine);
-  ifBlock.elseLine = elseLine;
-
-  return ifBlock;
-};
-
-function match_if(line) {
-  for(var s in support) {
+function matchIf(line) {
+  for(let s in support) {
     let re = support[s].ifre;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return {
         startLine: -1,
@@ -159,10 +211,10 @@ function match_if(line) {
   return undefined;
 }
 
-function match_endif(line) {
-  for(var s in support) {
+function matchEndif(line) {
+  for(let s in support) {
     let re = support[s].endifre;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return true;
     }
@@ -170,76 +222,21 @@ function match_endif(line) {
   return false;
 }
 
-function match_else(line) {
-  for(var s in support) {
+function matchElse(line) {
+  for(let s in support) {
     let re = support[s].elsere;
-    const match = re.exec(line);
+    const match = String(line).match(re);
     if(match) {
       return true;
     }
   }
   return false;
-}
-
-function find_start_if(lines, n) {
-  for(let t=n; t<lines.length; t++) {
-     const match = match_if(lines[t]);
-     if(match !== undefined) {
-        match.startLine = t;
-        return match;
-        // TODO: when es7 write as: return { line: t, ...match };
-     }
-  }
-  return undefined;
-}
-
-function find_end(lines, start) {
-  let level = 1;
-  for(let t=start+1; t<lines.length; t++) {
-     const mif  = match_if(lines[t]);
-     const mend = match_endif(lines[t]);
-
-     if(mif) {
-        level++;
-     }
-
-     if(mend) {
-        level--;
-        if(level === 0) {
-           return t;
-        }
-     }
-  }
-  return -1;
-}
-
-function find_else(lines, start, end) {
-  let level = 1;
-  for(let t=start+1; t<end; t++) {
-     const mif  = match_if(lines[t]);
-     const melse = match_else(lines[t]);
-     const mend = match_endif(lines[t]);
-     if(mif) {
-        level++;
-     }
-
-     if(mend) {
-        level--;
-     }
-
-     if (melse && level === 1) {
-        return t;
-     }
-  }
-
-  return -1;
 }
 
 /**
 * @return true if block has to be preserved
 */
 function evaluate(condition, keyword, defs) {
-
   const code = `return (${condition}) ? true : false;`;
   const args = Object.keys(defs);
 
@@ -248,9 +245,8 @@ function evaluate(condition, keyword, defs) {
     const f = new Function(...args, code);
     result = f(...args.map((k) => defs[k]));
      //console.log(`evaluation of (${condition}) === ${result}`);
-  }
-  catch(error) {
-     throw new Error(`error evaluation #if condition(${condition}): ${error}`);
+  } catch(error) {
+     throw new Error(`error evaluating #if condition(${condition}): ${error}`);
   }
 
   if(keyword === "ifndef") {
@@ -261,30 +257,14 @@ function evaluate(condition, keyword, defs) {
 }
 
 /**
- * Remove line numbers from the lines array, inclusive (so both line "start" and
- * line "end" will be removed, along with all lines in between). If insertBlanks
- * is true, instead of _cutting_ lines, we will replace them with blank lines instead.
- *
- * Typically, it is most useful to remove lines when you have source map support
- * enabled, and to replace them with blank lines if you do not.
- *
- * @param {Array.<string>} lines
- * @param {Array.<number>} lineMappings
- * @param {number} start
- * @param {number} end
- * @param {boolean} insertBlanks
+ * Print debugging information about evaluated conditions.
  */
-function remove_lines(lines, lineMappings, start, end, insertBlanks) {
-  if (insertBlanks) {
-    for(let t=start; t<=end; t++) {
-      const len = lines[t].length;
-      const lastChar = lines[t].charAt(len-1);
-      const windowsTermination = lastChar === '\r';
-      lines[t] = windowsTermination ? '\r' : '';
-    }
+function logResult(ifBlock, result, startLine, endLine) {
+  let message = `Condition (#${ifBlock.keyword} ${ifBlock.condition}) is ${result}: `;
+  if (startLine > -1) {
+    message += `keeping lines ${startLine+1}-${endLine+1} of ${ifBlock.ifLine+1}-${ifBlock.endifLine+1}`;
   } else {
-    let cutLength = end - start + 1;
-    lines.splice(start, cutLength);
-    lineMappings.splice(start, cutLength);
+    message += `removing lines ${ifBlock.ifLine+1}-${ifBlock.endifLine+1}`;
   }
+  console.log(message);
 }
