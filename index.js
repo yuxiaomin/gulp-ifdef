@@ -83,7 +83,12 @@ var support = {
     ifre: /^[\s]*<!--([\s]*)#(if)([\s\S]+)-->[\s]*$/,
     endifre: /^[\s]*<!--([\s]*)#(endif)([\s\S]+)-->[\s]*$/,
     elsere: /^[\s]*<!--([\s]*)#(else)([\s\S]+)-->[\s]*$/
-  }
+  },
+  "useJSX": {
+    ifre: /^[\s]*{\/\*([\s]*)#(if)([\s\S]+)\*\/}[\s]*$/,
+    endifre: /^[\s]*{\/\*([\s]*)#(endif)([\s\S]+)\*\/}[\s]*$/,
+    elsere: /^[\s]*{\/\*([\s]*)#(else)([\s\S]+)\*\/}[\s]*$/,
+  },
 };
 
 function parse(source, defs, verbose, insertBlanks) {

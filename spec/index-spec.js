@@ -116,6 +116,17 @@ describe('gulp-ifdef', function () {
         .on('error', error => done(error));
     });
 
+    it('support jsx', function (done) {
+        gulp.src(['spec/fixtures/simple.jsx'])
+        .pipe(ifdef({ DEBUG: false }, { extname: ['jsx'] }))
+        .on('data', file => {
+            const expected = fs.readFileSync('spec/fixtures/simple.out.jsx', 'utf8');
+            expect(file.contents.toString()).toEqual(expected);
+            done();
+        })
+        .on('error', error => done(error));
+    });
+
     it('prints debugging information if verbose mode is enabled', function (done) {
         spyOn(console, 'log');
 
